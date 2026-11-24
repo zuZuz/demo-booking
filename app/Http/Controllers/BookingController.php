@@ -8,6 +8,7 @@ use App\Models\Room;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class BookingController extends Controller
@@ -25,24 +26,30 @@ class BookingController extends Controller
         $startsAt = $request->startsAtUtc();
         $endsAt = $request->endsAtUtc();
 
-        if (Booking::where('room_id', $roomId)
-            ->where('starts_at', '<', $endsAt)
-            ->where('ends_at', '>', $startsAt)
-            ->exists()) {
-            return response()->json(['error' => 'Комната занята'], 409);
+        $result = DB::transaction(function () use ($request, $roomId, $startsAt, $endsAt): Booking|JsonResponse {
+            Room::whereKey($roomId)->lockForUpdate()->firstOrFail();
+
+            if (Booking::where('room_id', $roomId)
+                ->where('starts_at', '<', $endsAt)
+                ->where('ends_at', '>', $startsAt)
+                ->exists()) {
+                return response()->json(['error' => 'Комната занята'], 409);
+            }
+
+            return Booking::create([
+                'room_id' => $roomId,
+                'title' => $request->validated('title'),
+                'user_id' => $request->user()->id,
+                'starts_at' => $startsAt,
+                'ends_at' => $endsAt,
+            ]);
+        });
+
+        if ($result instanceof Booking) {
+            Log::channel('bookings')->info('Booking created', ['booking_id' => $result->id]);
         }
 
-        $booking = Booking::create([
-            'room_id' => $roomId,
-            'title' => $request->validated('title'),
-            'user_id' => $request->user()->id,
-            'starts_at' => $startsAt,
-            'ends_at' => $endsAt,
-        ]);
-
-        Log::channel('bookings')->info('Booking created', ['booking_id' => $booking->id]);
-
-        return $booking;
+        return $result;
     }
 
     public function destroy(Request $request, int $id): Response
